@@ -1,13 +1,9 @@
-"""Client-side behaviour: joining a host's session and receiving PCM."""
-
 from __future__ import annotations
 
 import socket
 import struct
 import threading
-
 import numpy as np
-
 from utils import (
     AUDIO_PORT,
     Session,
@@ -18,15 +14,6 @@ from utils import (
 
 
 class ClientMixin:
-    """Mixin providing peer-role behaviour for `Node`.
-
-    The owning `Node` must provide:
-      - self._session_lock, self.session, self._teardown_session_locked()
-      - self.room (Optional[Room])
-    """
-
-    # ------------------------------------------------------------------
-
     def _handle_session_start(self, msg: dict, src_ip: str) -> None:
         try:
             sid = msg["session_id"]
@@ -41,7 +28,6 @@ class ClientMixin:
         except (KeyError, ValueError, TypeError) as e:
             print(f"[session] malformed SESSION_START: {e}")
             return
-
         # Reject sessions from outside our room.
         room = getattr(self, "room", None)
         if not room or room_id != room.room_id:
@@ -57,7 +43,6 @@ class ClientMixin:
         host_ip = msg.get("host_ip") or src_ip
         print(f"[session] joining '{title}' from {host_ip} "
               f"({sr}Hz x{channels}, {total/sr:.1f}s)")
-
         meas = measure_offset(host_ip)
         if meas is None:
             print("[session] could not measure clock offset; aborting")
@@ -78,7 +63,6 @@ class ClientMixin:
         with self._session_lock:
             self.session = sess
         sess.player.start()
-
         t = threading.Thread(
             target=self._audio_receive_loop,
             args=(sess, host_ip, audio_port),
@@ -86,9 +70,7 @@ class ClientMixin:
         )
         sess.audio_thread = t
         t.start()
-
-    # ------------------------------------------------------------------
-
+    
     def _audio_receive_loop(self, sess: Session, host_ip: str,
                             audio_port: int) -> None:
         try:
@@ -115,8 +97,6 @@ class ClientMixin:
             print(f"[audio] receiver error: {e}")
         finally:
             print("[audio] stream closed")
-
-    # ------------------------------------------------------------------
 
     def _on_playback_finished(self) -> None:
         with self._session_lock:

@@ -37,21 +37,16 @@ from host import HostMixin
 from utils import (
     CONTROL_PORT,
     SERVICE_TYPE,
-    PeerRegistry,
-    Peer,
-    Room,
-    Session,
-    TimeSyncServer,
     get_local_ip,
     recv_json_lines,
     request_response,
     send_json,
 )
-
-
-# ---------------------------------------------------------------------------
-# Node
-# ---------------------------------------------------------------------------
+from TimeSyncServer import TimeSyncServer
+from PeerRegistry import PeerRegistry
+from Peer import Peer
+from Room import Room
+from Session import Session
 
 class Node(HostMixin, ClientMixin):
     def __init__(self, display_name: str):
@@ -73,8 +68,6 @@ class Node(HostMixin, ClientMixin):
         self.room: Optional[Room] = None
         self._session_lock = threading.Lock()
         self.session: Optional[Session] = None
-
-    # ---- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
         self._timesync.start()
