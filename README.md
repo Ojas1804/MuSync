@@ -1,6 +1,6 @@
 # MuSync
 
-Synchronized multi-device audio playback over LAN/Wi‑Fi in pure Python.
+Play music on multiple devices on the same network in sync. Synchronized multi-device audio playback over LAN/Wi‑Fi in pure Python.
 
 Any device on the network can become the **host** by playing a local audio
 file; every other peer automatically pulls the PCM stream over TCP and plays
