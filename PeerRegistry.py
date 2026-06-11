@@ -64,3 +64,13 @@ class PeerRegistry(ServiceListener):
     def in_room(self, room_id: str) -> List[Peer]:
         with self._lock:
             return [p for p in self.peers.values() if p.room_id == room_id]
+
+    def set_room(self, node_id: str, room_id: str) -> None:
+        """Directly update a peer's room without waiting for Zeroconf propagation."""
+        with self._lock:
+            if node_id in self.peers:
+                p = self.peers[node_id]
+                self.peers[node_id] = Peer(
+                    name=p.name, node_id=p.node_id, ip=p.ip,
+                    control_port=p.control_port, room_id=room_id,
+                )

@@ -8,6 +8,7 @@ from Session import Session
 from SyncPlayer import SyncPlayer
 from utils import (
     AUDIO_PORT,
+    TIMESYNC_PORT,
     measure_offset,
     recv_exact,
 )
@@ -45,7 +46,8 @@ class ClientMixin:
               f"({sr}Hz x{channels}, {total/sr:.1f}s)")
         meas = measure_offset(host_ip)
         if meas is None:
-            print("[session] could not measure clock offset; aborting")
+            print(f"[session] could not reach timesync server at {host_ip}:{TIMESYNC_PORT} (UDP). " +
+                  "Check that port 51901 UDP is allowed through the host firewall. Aborting.")
             return
         rtt, offset = meas
         print(f"[timesync] rtt={rtt*1000:.1f}ms offset={offset*1000:.1f}ms")
@@ -94,7 +96,7 @@ class ClientMixin:
                     if sess.player:
                         sess.player.write(int(frame_offset), samples_f)
         except OSError as e:
-            print(f"[audio] receiver error: {e}")
+            print(f"[audio] receiver error: {e}. Check that port 51902 TCP is allowed through the host firewall.")
         finally:
             print("[audio] stream closed")
 

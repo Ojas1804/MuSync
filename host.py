@@ -34,13 +34,9 @@ class HostMixin:
       - self._send_to_peer(peer, msg) -> bool
       - self._on_playback_finished()
     """
-
-    # set/cleared by HostMixin itself
     _audio_listener: Optional[socket.socket] = None
     _audio_listener_thread: Optional[threading.Thread] = None
     _audio_data: Optional[np.ndarray] = None  # int16 [N, ch], pre-quantized
-
-    # ------------------------------------------------------------------
 
     def play_file(self, path: str, lead_in: float = DEFAULT_LEAD_IN) -> None:
         if not getattr(self, "room", None):
@@ -58,11 +54,6 @@ class HostMixin:
         total = data.shape[0]
         title = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         sid = uuid.uuid4().hex[:12]
-
-        # Tear down any current session locally. We deliberately do NOT
-        # broadcast SESSION_STOP here: the new SESSION_START below already
-        # causes peers to replace their session, and a late SESSION_STOP
-        # arriving on a separate TCP connection could otherwise kill it.
         with self._session_lock:
             if self.session:
                 self._teardown_session_locked()
@@ -70,9 +61,6 @@ class HostMixin:
         start_host = time.time() + lead_in
         room_peers = self.registry.in_room(self.room.room_id)
 
-        # Pre-create the session and publish it before opening the audio
-        # listener, so the listener's accept loop sees a live session on
-        # its first iteration.
         sess = Session(
             session_id=sid, host_id=self.node_id, host_ip=self.local_ip,
             sr=sr, channels=channels, total_frames=total,
@@ -97,6 +85,9 @@ class HostMixin:
             "audio_port": AUDIO_PORT,
             "room_id": self.room.room_id,
         }
+        if not room_peers:
+            print("[host] warning: no peers in room registry yet; SESSION_START not sent. " +
+                  "Ensure the peer has joined and Zeroconf has propagated (~2s).")
         for p in room_peers:
             self._send_to_peer(p, msg)
 
@@ -110,9 +101,7 @@ class HostMixin:
         sess.player.start()
         print(f"[host] playing '{title}' to {len(room_peers)} peer(s); "
               f"start in {lead_in:.1f}s")
-
-    # ------------------------------------------------------------------
-
+    
     def _start_audio_listener(self, session_id: str, total: int,
                               channels: int, sr: int, data: np.ndarray) -> None:
         # Pre-quantize float32 -> int16 once for streaming.
@@ -189,9 +178,7 @@ class HostMixin:
                 client.close()
             except Exception:
                 pass
-
-    # ------------------------------------------------------------------
-
+    
     def _close_host_audio(self) -> None:
         """Called by Node._teardown_session_locked when the local node is host."""
         sock = self._audio_listener

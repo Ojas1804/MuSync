@@ -1,111 +1,221 @@
 # MuSync
 
-Play music on multiple devices on the same network in sync. Synchronized multi-device audio playback over LAN/Wi‑Fi in pure Python.
+Synchronized multi-device audio playback over LAN/Wi-Fi in pure Python.
 
-Any device on the network can become the **host** by playing a local audio
-file; every other peer automatically pulls the PCM stream over TCP and plays
-it in lock-step using an NTP-style clock offset measured against the host.
+Any device on the network can become the **host** by playing a local audio file. Every other peer automatically pulls the raw PCM stream over TCP and plays it in lock-step using an NTP-style clock offset measured against the host.
+
+> **The audio file only needs to exist on the host device.** Peers receive the stream over the network — no file copying required.
 
 ## Features
 
-- Auto peer discovery with Zeroconf (`_musync._tcp.local.`).
+- Auto peer discovery via Zeroconf (`_musync._tcp.local.`).
 - NTP-style 4-timestamp clock-offset estimation (best-of-N RTT samples).
 - Sample-accurate scheduled playback via `sounddevice` callback timing.
-- Host can change at any time — any peer can start a new song; the previous
-  session is torn down and a new one is announced.
-- Brief (configurable) lead-in time per session so all peers can buffer and
-  re-sync before audio starts.
+- Room-based grouping — only devices in the same room hear the stream.
+- Any peer can become the host at any time; the previous session tears down automatically.
+- Configurable lead-in time so all peers buffer and sync before audio starts.
+- Both a CLI/REPL (`musync.py`) and a browser UI (`webapp.py`).
+
+## Requirements
+
+- Python 3.9+
+- An audio output device on every device
 
 ## Install
+
+Run on **every device**:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-You also need an OS audio output. On Windows everything works out of the box.
-On Linux install `libportaudio2` and `libsndfile1`.
-
-Supported file formats: anything `libsndfile` reads — WAV, FLAC, OGG, AIFF,
-etc. (MP3 is supported only on recent libsndfile builds; convert to WAV/FLAC
-if needed.)
-
-## Project layout
-
-| File         | Role                                                         |
-|--------------|--------------------------------------------------------------|
-| `utils.py`   | constants, networking helpers, time-sync, `SyncPlayer`, peer registry, `Peer`/`Room`/`Session` dataclasses |
-| `host.py`    | `HostMixin`: load audio, announce session, stream PCM        |
-| `client.py`  | `ClientMixin`: handle `SESSION_START`, receive PCM, schedule playback |
-| `musync.py`  | `Node` (composes the mixins), Zeroconf, **rooms**, CLI/REPL  |
-| `webapp.py`  | Browser UI for room control, peer status, and synced playback |
-
-## Run
-
-On every device:
+On Linux you also need system libraries:
 
 ```bash
+sudo apt install libportaudio2 libsndfile1
+```
+
+On Windows and macOS everything works out of the box.
+
+### Supported audio formats
+
+WAV, FLAC, OGG, AIFF. (MP3 requires a recent `libsndfile` build — use WAV/FLAC if unsure.)
+
+---
+
+## Running the CLI
+
+Run on **every device** that should participate:
+
+```bash
+python musync.py --name <DeviceName>
+```
+
+Example:
+
+```bash
+# Device A
 python musync.py --name LivingRoom
+
+# Device B
+python musync.py --name Bedroom
 ```
 
-Or run the LAN web UI:
+### Step-by-step (CLI)
 
-```bash
-python webapp.py --name LivingRoom --port 8080
-```
-
-Open `http://127.0.0.1:8080` on the host computer, or use the LAN URL printed
-by the app from another device on the same network. The music folder path you
-enter in the UI is a folder on the computer running `webapp.py`.
-
-### Rooms
-
-A *room* is a persistent group of devices that play together. To play
-synchronized audio you must first either create a room or join one:
+**1. Create a room on one device (the future host)**
 
 ```
-> create-room                # generates a 6-digit code, you can share it
-[room] created 'LivingRoom's room  id=ab12cd34  code=472913
+> create-room Living Room
+[room] created 'Living Room'  id=ab12cd34  code=472913
 ```
 
-On every other device:
+Share the `id` and `code` with the other devices.
+
+**2. Join the room on every other device**
 
 ```
-> rooms                      # list rooms visible on the LAN
+> rooms                       # confirm the room is visible on the LAN
   ab12cd34   members:  1   e.g. LivingRoom
-> join ab12cd34 472913       # enter the code
+
+> join ab12cd34 472913        # use the id and code from step 1
 [room] joined ab12cd34 via LivingRoom
 ```
 
-The code **does not expire** — anyone with it can join the room at any time.
-Any current member of the room validates new join requests against the code.
-
-### Playing
-
-Once at least two devices share a room, on any of them:
+**3. Play a file from the host device**
 
 ```
-> play song.flac             # this device becomes host for the room
-> stop                       # stop the current session
-> quit
+> play "C:\Users\You\Music\song.wav"
+[host] playing 'song.wav' to 1 peer(s); start in 3.0s
 ```
 
-The host role moves transparently each time some device runs `play` — only
-members of the same room receive the stream.
+All devices in the room will start playing in sync after the lead-in.
 
-## Network ports
+**4. Other useful commands**
 
-| Purpose       | Proto | Port  |
-|---------------|-------|-------|
-| Control       | TCP   | 51900 |
-| Time sync     | UDP   | 51901 |
-| Audio stream  | TCP   | 51902 |
-| Zeroconf mDNS | UDP   | 5353  |
+```
+> stop              # stop the current session
+> room              # show current room details and connected members
+> peers             # list all discovered devices on the network
+> devices           # list local audio output devices
+> leave             # leave the current room
+> help              # show all commands
+> quit              # shut down
+```
 
-Allow these through your firewall on the local network.
+---
 
-## Notes / limitations
+## Running the Web App
 
-- First-time sync after a host change takes ~2–3 s (default lead-in) while
-  peers measure clock offset and pre-buffer.
-- Quality of synchronization depends on Wi‑Fi jitter; wired LAN is best.
-- This is a hobby project, not a hardened protocol.
+Run on **every device** that should participate:
+
+```bash
+python webapp.py --name <DeviceName> --port 8080
+```
+
+Example:
+
+```bash
+# Device A
+python webapp.py --name LivingRoom --port 8080
+
+# Device B
+python webapp.py --name Bedroom --port 8080
+```
+
+On startup the app prints two URLs:
+
+```
+[web] open locally:  http://127.0.0.1:8080
+[web] open on LAN:   http://192.168.1.10:8080
+```
+
+Open the **LAN URL** from any browser on the same network to control that device.
+
+### Step-by-step (Web App)
+
+**1. Create a room on one device**
+
+- Open the device's web UI in a browser.
+- Under **Room**, type a room name and click **Create**.
+- Note the room ID and code shown in the Room badge.
+
+**2. Join the room on every other device**
+
+- Open each device's web UI.
+- Under **Room**, enter the **Room ID** and **Code** from step 1.
+- Click **Join**.
+
+**3. Scan and play a file from the host device**
+
+- Under **Playback**, enter the path to a folder on *that computer* (e.g. `C:\Users\You\Music` or `test_source`).
+- Click **Scan** to list supported audio files.
+- Click **Play** next to any file.
+
+All devices in the room will start playing in sync.
+
+**4. Stop playback**
+
+- Click **Stop** in the Playback panel.
+
+> **Note:** The music folder path is resolved on the computer running `webapp.py`, not the browser. Devices only need the audio files on the machine acting as host.
+
+---
+
+## Network Ports
+
+All ports must be reachable **inbound** on the host device from the local network.
+
+| Purpose       | Protocol | Port  |
+|---------------|----------|-------|
+| Control       | TCP      | 51900 |
+| Time sync     | UDP      | 51901 |
+| Audio stream  | TCP      | 51902 |
+| Zeroconf mDNS | UDP      | 5353  |
+
+### Windows Firewall
+
+If peers connect to a room but hear no audio, the firewall is the most likely cause. Run the following in an **Administrator PowerShell** on the **host** device:
+
+```powershell
+New-NetFirewallRule -DisplayName "MuSync Control"   -Direction Inbound -Protocol TCP -LocalPort 51900 -Action Allow
+New-NetFirewallRule -DisplayName "MuSync TimeSync"  -Direction Inbound -Protocol UDP -LocalPort 51901 -Action Allow
+New-NetFirewallRule -DisplayName "MuSync Audio"     -Direction Inbound -Protocol TCP -LocalPort 51902 -Action Allow
+```
+
+---
+
+## Project Layout
+
+| File              | Role                                                                 |
+|-------------------|----------------------------------------------------------------------|
+| `musync.py`       | CLI entry point and REPL                                             |
+| `webapp.py`       | Browser UI entry point (HTTP server + JS frontend)                   |
+| `Node.py`         | Core node: composes mixins, Zeroconf, control plane, rooms           |
+| `host.py`         | `HostMixin`: load audio, announce session, stream PCM to peers       |
+| `client.py`       | `ClientMixin`: handle `SESSION_START`, receive PCM, schedule playback |
+| `SyncPlayer.py`   | `sounddevice`-based player with sample-accurate scheduled output     |
+| `PeerRegistry.py` | Zeroconf `ServiceListener` that tracks discovered peers              |
+| `TimeSyncServer.py` | UDP NTP-style time-sync responder (runs on host)                   |
+| `utils.py`        | Shared constants, networking helpers, clock offset measurement       |
+| `Peer.py`         | `Peer` dataclass                                                     |
+| `Room.py`         | `Room` dataclass                                                     |
+| `Session.py`      | `Session` dataclass                                                  |
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Peers not discovered | mDNS/multicast blocked by router | Check router settings; try a wired connection |
+| `could not reach timesync server` on client | UDP 51901 blocked on host | Add firewall rule (see above) |
+| `receiver error` on client / silence | TCP 51902 blocked on host | Add firewall rule (see above) |
+| `no peers in room registry yet` on host | Played too quickly after join | Wait ~2s after joining, then play |
+| Audio out of sync | High Wi-Fi jitter | Use wired LAN for better sync |
+
+## Notes
+
+- Sync quality depends on network jitter; wired LAN gives the best results.
+- The default lead-in is 3 seconds to allow all peers to buffer and sync.
+- This is a hobby project, not a hardened production protocol.

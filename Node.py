@@ -68,8 +68,7 @@ class Node(HostMixin, ClientMixin):
             except Exception:
                 pass
 
-    # ---- zeroconf ----------------------------------------------------------
-
+    #  zeroconf 
     def _zeroconf_properties(self) -> dict:
         props = {"id": self.node_id, "name": self.display_name}
         if self.room:
@@ -108,8 +107,7 @@ class Node(HostMixin, ClientMixin):
         except Exception as e:
             print(f"[discovery] failed to republish: {e}")
 
-    # ---- control plane -----------------------------------------------------
-
+    # control plane 
     def _start_control_server(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -176,8 +174,7 @@ class Node(HostMixin, ClientMixin):
             print(f"[net] failed to reach {peer.name}: {e}")
             return False
 
-    # ---- session teardown --------------------------------------------------
-
+    # session teardown
     def _teardown_session_locked(self) -> None:
         sess = self.session
         if not sess:
@@ -202,8 +199,7 @@ class Node(HostMixin, ClientMixin):
             for p in self.registry.in_room(self.room.room_id):
                 self._send_to_peer(p, {"type": "SESSION_STOP", "session_id": sid})
 
-    # ---- rooms -------------------------------------------------------------
-
+    # rooms
     @staticmethod
     def _gen_code() -> str:
         return f"{random.randint(0, 999_999):06d}"
@@ -290,10 +286,13 @@ class Node(HostMixin, ClientMixin):
         rid = msg.get("room_id")
         code = msg.get("code")
         who = msg.get("name", src_ip)
+        joining_id = msg.get("node_id")
         if not self.room or self.room.room_id != rid:
             return {"ok": False, "reason": "not a member of that room"}
         if code != self.room.code:
             print(f"[room] denied join from {who}: bad code")
             return {"ok": False, "reason": "invalid code"}
         print(f"[room] approved join from {who} ({src_ip})")
+        if joining_id:
+            self.registry.set_room(joining_id, rid)
         return {"ok": True, "room_name": self.room.name}
