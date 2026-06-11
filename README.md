@@ -37,6 +37,7 @@ if needed.)
 | `host.py`    | `HostMixin`: load audio, announce session, stream PCM        |
 | `client.py`  | `ClientMixin`: handle `SESSION_START`, receive PCM, schedule playback |
 | `musync.py`  | `Node` (composes the mixins), Zeroconf, **rooms**, CLI/REPL  |
+| `webapp.py`  | Browser UI for room control, peer status, and synced playback |
 
 ## Run
 
@@ -45,6 +46,16 @@ On every device:
 ```bash
 python musync.py --name LivingRoom
 ```
+
+Or run the LAN web UI:
+
+```bash
+python webapp.py --name LivingRoom --port 8080
+```
+
+Open `http://127.0.0.1:8080` on the host computer, or use the LAN URL printed
+by the app from another device on the same network. The music folder path you
+enter in the UI is a folder on the computer running `webapp.py`.
 
 ### Rooms
 

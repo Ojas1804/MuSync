@@ -13,12 +13,12 @@ from typing import Optional
 import numpy as np
 import soundfile as sf
 
+from Session import Session
+from SyncPlayer import SyncPlayer
 from utils import (
     AUDIO_PORT,
     CHUNK_FRAMES,
     DEFAULT_LEAD_IN,
-    Session,
-    SyncPlayer,
     recv_exact,
 )
 

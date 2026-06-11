@@ -4,10 +4,10 @@ import socket
 import struct
 import threading
 import numpy as np
+from Session import Session
+from SyncPlayer import SyncPlayer
 from utils import (
     AUDIO_PORT,
-    Session,
-    SyncPlayer,
     measure_offset,
     recv_exact,
 )
