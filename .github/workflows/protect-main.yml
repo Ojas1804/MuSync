@@ -1,0 +1,104 @@
+name: Protect Main Branch
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTHORIZED REVIEWERS
+# Add GitHub usernames here to grant merge approval rights alongside the owner.
+# The repo owner is always authorized — no need to list them here.
+#
+# Example:
+#   REVIEWERS: "alice bob carol"
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  REVIEWERS: ""   # space-separated GitHub usernames, e.g. "alice bob"
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Block direct pushes to main from anyone except the owner
+  # ───────────────────────────────────────────────────────────────────────────
+  block-direct-push:
+    name: Block direct push to main
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Check if pusher is the repo owner
+        env:
+          PUSHER: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "Pusher : $PUSHER"
+          echo "Owner  : $OWNER"
+          if [ "$PUSHER" != "$OWNER" ]; then
+            echo "::error::   Direct pushes to main are not allowed for '$PUSHER'."
+            echo "::error::   Open a pull request from a feature branch instead."
+            exit 1
+          fi
+          echo "✅ Repo owner push — allowed."
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Require approval from the owner OR any authorized reviewer before merging
+  # ───────────────────────────────────────────────────────────────────────────
+  check-authorized-approval:
+    name: Require owner or reviewer approval
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Check for approval from an authorized user
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          EXTRA_REVIEWERS: ${{ env.REVIEWERS }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "PR #$PR_NUMBER — authorization check"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Build the list of authorized users: owner + any extra reviewers
+          AUTHORIZED="$OWNER"
+          for reviewer in $EXTRA_REVIEWERS; do
+            AUTHORIZED="$AUTHORIZED $reviewer"
+          done
+          echo "Authorized users : $AUTHORIZED"
+
+          # Fetch all APPROVED reviews for this PR
+          APPROVERS=$(gh api \
+            repos/$REPO/pulls/$PR_NUMBER/reviews \
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | .[]')
+
+          if [ -z "$APPROVERS" ]; then
+            echo "::error::   No approvals found on PR #$PR_NUMBER."
+            echo "::error::   An authorized user must approve before this PR can be merged."
+            echo "::error::   Authorized: $AUTHORIZED"
+            exit 1
+          fi
+
+          echo "Approved by      : $(echo "$APPROVERS" | tr '\n' ' ')"
+
+          # Check if any approver is in the authorized list
+          MATCHED=""
+          for approver in $APPROVERS; do
+            for authorized in $AUTHORIZED; do
+              if [ "$approver" = "$authorized" ]; then
+                MATCHED="$approver"
+                break 2
+              fi
+            done
+          done
+
+          if [ -z "$MATCHED" ]; then
+            echo "::error::   None of the approvers are authorized to approve merges to main."
+            echo "::error::   Authorized users: $AUTHORIZED"
+            echo "::error::   To add a reviewer, update the REVIEWERS variable in protect-main.yml."
+            exit 1
+          fi
+
+          echo "✅ Approved by authorized user '$MATCHED' — merge is allowed."
