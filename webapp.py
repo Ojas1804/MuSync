@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import os
+import queue
 import socket
 import sys
 import threading
@@ -493,6 +494,89 @@ els.stopButton.addEventListener("click", () => run(stopPlayback));
 
 run(refreshStatus);
 setInterval(() => run(refreshStatus), 3000);
+
+// ── Browser Audio (Web Audio API + SSE) ────────────────────────────────────
+
+let _audioCtx = null;
+let _clockOffset = 0;   // host_seconds - browser_seconds
+let _currentSource = null;
+
+function _getCtx() {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return _audioCtx;
+}
+
+async function _syncClock() {
+  let best = {rtt: Infinity, offset: 0};
+  for (let i = 0; i < 8; i++) {
+    const t1 = Date.now();
+    try {
+      const r = await fetch("/api/timesync", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({t1}),
+      });
+      const t4 = Date.now();
+      const {t2, t3} = await r.json();
+      const rtt = (t4 - t1) - (t3 - t2);
+      if (rtt < best.rtt && rtt >= 0) {
+        best = {rtt, offset: ((t2 - t1) + (t3 - t4)) / 2};
+      }
+    } catch (_) {}
+    await new Promise(res => setTimeout(res, 40));
+  }
+  _clockOffset = best.offset / 1000;
+}
+
+function _stopBrowserAudio() {
+  if (_currentSource) {
+    try { _currentSource.stop(); } catch (_) {}
+    try { _currentSource.disconnect(); } catch (_) {}
+    _currentSource = null;
+  }
+}
+
+async function _startBrowserAudio(msg) {
+  _stopBrowserAudio();
+  try {
+    await _syncClock();
+    const ctx = _getCtx();
+    if (ctx.state === "suspended") await ctx.resume();
+    const resp = await fetch("/audio/" + msg.session_id);
+    if (!resp.ok) { log("[audio] server returned " + resp.status); return; }
+    const arrayBuf = await resp.arrayBuffer();
+    const audioBuf = await ctx.decodeAudioData(arrayBuf);
+    const hostNow = Date.now() / 1000 + _clockOffset;
+    const delay = msg.start_host_time - hostNow;
+    const startAt = ctx.currentTime + Math.max(0.05, delay);
+    _currentSource = ctx.createBufferSource();
+    _currentSource.buffer = audioBuf;
+    _currentSource.connect(ctx.destination);
+    _currentSource.start(startAt);
+    log("[audio] browser: '" + msg.title + "' starts in " + delay.toFixed(2) + "s");
+  } catch (err) {
+    log("[audio] browser error: " + err.message);
+  }
+}
+
+function _subscribeEvents() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "SESSION_START") run(() => _startBrowserAudio(msg));
+    if (msg.type === "SESSION_STOP")  _stopBrowserAudio();
+  };
+  es.onerror = () => setTimeout(_subscribeEvents, 3000);
+}
+
+// Unlock AudioContext on first user gesture (required on iOS Safari)
+document.addEventListener("click", () => {
+  if (_audioCtx && _audioCtx.state === "suspended") _audioCtx.resume();
+}, {once: false});
+
+_subscribeEvents();
 """
 
 
@@ -501,6 +585,9 @@ class MuSyncWebApp:
         self.node = node
         self.port = port
         self.lock = threading.Lock()
+        self._sse_lock = threading.Lock()
+        self._sse_clients: list = []
+        self._session_audio: dict = {}
 
     def status(self) -> dict[str, Any]:
         peers = [
@@ -574,11 +661,21 @@ class MuSyncWebApp:
             raise ValueError("Unsupported audio file type")
         with self.lock:
             self.node.play_file(str(audio_path))
+        sess = self.node.session
+        if sess:
+            self._session_audio[sess.session_id] = str(audio_path)
+            self._push_sse({
+                "type": "SESSION_START",
+                "session_id": sess.session_id,
+                "start_host_time": sess.start_host_time,
+                "title": sess.title,
+            })
         return {"ok": True}
 
     def stop(self) -> dict[str, Any]:
         with self.lock:
             self.node.stop_session()
+        self._push_sse({"type": "SESSION_STOP"})
         return {"ok": True}
 
     def list_files(self, folder: str) -> dict[str, Any]:
@@ -590,6 +687,36 @@ class MuSyncWebApp:
             if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
                 files.append({"name": path.name, "path": str(path)})
         return {"ok": True, "folder": str(root), "files": files[:500]}
+
+    def _push_sse(self, event: dict) -> None:
+        data = json.dumps(event)
+        with self._sse_lock:
+            dead = []
+            for q in self._sse_clients:
+                try:
+                    q.put_nowait(data)
+                except Exception:
+                    dead.append(q)
+            for q in dead:
+                self._sse_clients.remove(q)
+
+    def timesync(self, t1_ms: float) -> dict[str, Any]:
+        t2 = time.time() * 1000
+        t3 = time.time() * 1000
+        return {"ok": True, "t1": t1_ms, "t2": t2, "t3": t3}
+
+    def audio_data(self, session_id: str):
+        path = self._session_audio.get(session_id)
+        if not path or not Path(path).is_file():
+            raise FileNotFoundError("Audio not available for this session")
+        data = Path(path).read_bytes()
+        suffix = Path(path).suffix.lower()
+        mime = {
+            ".wav": "audio/wav", ".flac": "audio/flac",
+            ".ogg": "audio/ogg", ".oga": "audio/ogg",
+            ".aiff": "audio/aiff", ".aif": "audio/aiff",
+        }.get(suffix, "application/octet-stream")
+        return mime, data
 
 
 def make_handler(app: MuSyncWebApp):
@@ -614,6 +741,17 @@ def make_handler(app: MuSyncWebApp):
                     query = urllib.parse.parse_qs(parsed.query)
                     folder = query.get("folder", [""])[0]
                     self._send_json(app.list_files(folder))
+                elif parsed.path == "/api/events":
+                    self._handle_sse(app)
+                elif parsed.path.startswith("/audio/"):
+                    session_id = parsed.path[len("/audio/"):]
+                    mime, data = app.audio_data(session_id)
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
                 else:
                     self.send_error(404)
             except Exception as exc:
@@ -633,6 +771,8 @@ def make_handler(app: MuSyncWebApp):
                     self._send_json(app.play(body.get("path", "")))
                 elif parsed.path == "/api/stop":
                     self._send_json(app.stop())
+                elif parsed.path == "/api/timesync":
+                    self._send_json(app.timesync(body.get("t1", 0)))
                 else:
                     self.send_error(404)
             except Exception as exc:
@@ -666,6 +806,33 @@ def make_handler(app: MuSyncWebApp):
 
         def _send_error(self, exc: Exception) -> None:
             self._send_json({"ok": False, "error": str(exc)}, status=400)
+
+        def _handle_sse(self, app) -> None:
+            q: queue.Queue = queue.Queue()
+            with app._sse_lock:
+                app._sse_clients.append(q)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        self.wfile.write(f"data: {data}\n\n".encode())
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                with app._sse_lock:
+                    try:
+                        app._sse_clients.remove(q)
+                    except ValueError:
+                        pass
 
     return Handler
 
