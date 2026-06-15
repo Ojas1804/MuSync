@@ -496,17 +496,49 @@ run(refreshStatus);
 setInterval(() => run(refreshStatus), 3000);
 
 // ── Browser Audio (Web Audio API + SSE) ────────────────────────────────────
+// Mobile browsers (especially iOS Safari) block AudioContext until a user
+// gesture. We show a banner that must be tapped; this also handles joining
+// a track that is already mid-play when the page first opens.
 
 let _audioCtx = null;
-let _clockOffset = 0;   // host_seconds - browser_seconds
+let _clockOffset = 0;      // host_seconds - browser_seconds
 let _currentSource = null;
+let _audioUnlocked = false;
 
-function _getCtx() {
+// ── Inject "tap to enable" banner ──
+(function () {
+  const b = document.createElement("div");
+  b.id = "mu-audio-banner";
+  b.textContent = "\uD83D\uDD0A Tap here to enable audio on this device";
+  b.style.cssText = [
+    "position:fixed", "top:0", "left:0", "right:0", "z-index:9999",
+    "background:#1565c0", "color:#fff", "padding:14px 16px",
+    "text-align:center", "font-size:16px", "font-weight:bold",
+    "cursor:pointer", "user-select:none",
+  ].join(";");
+  document.body.appendChild(b);
+})();
+
+function _ensureCtx() {
   if (!_audioCtx) {
     _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
+  if (_audioCtx.state === "suspended") _audioCtx.resume();
   return _audioCtx;
 }
+
+function _unlockAudio() {
+  _ensureCtx();
+  if (!_audioUnlocked) {
+    _audioUnlocked = true;
+    const b = document.getElementById("mu-audio-banner");
+    if (b) b.style.display = "none";
+    log("[audio] audio enabled on this device");
+    run(_joinCurrentSession);  // catch up if a session is already playing
+  }
+}
+
+document.addEventListener("click", _unlockAudio, {capture: true});
 
 async function _syncClock() {
   let best = {rtt: Infinity, offset: 0};
@@ -539,26 +571,58 @@ function _stopBrowserAudio() {
 }
 
 async function _startBrowserAudio(msg) {
+  if (!_audioUnlocked) {
+    log("[audio] tap the blue banner at the top to enable audio, then play again");
+    return;
+  }
   _stopBrowserAudio();
   try {
     await _syncClock();
-    const ctx = _getCtx();
-    if (ctx.state === "suspended") await ctx.resume();
+    const ctx = _ensureCtx();
+
     const resp = await fetch("/audio/" + msg.session_id);
-    if (!resp.ok) { log("[audio] server returned " + resp.status); return; }
+    if (!resp.ok) { log("[audio] could not download audio (" + resp.status + ")"); return; }
     const arrayBuf = await resp.arrayBuffer();
     const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
     const hostNow = Date.now() / 1000 + _clockOffset;
     const delay = msg.start_host_time - hostNow;
-    const startAt = ctx.currentTime + Math.max(0.05, delay);
+
     _currentSource = ctx.createBufferSource();
     _currentSource.buffer = audioBuf;
     _currentSource.connect(ctx.destination);
-    _currentSource.start(startAt);
-    log("[audio] browser: '" + msg.title + "' starts in " + delay.toFixed(2) + "s");
+
+    if (delay > 0.05) {
+      // Still ahead of start time — schedule normally
+      _currentSource.start(ctx.currentTime + delay);
+      log("[audio] '" + msg.title + "' starts in " + delay.toFixed(2) + "s");
+    } else {
+      // Start time already passed — jump to the correct position in the track
+      const elapsed = Math.min(-delay, audioBuf.duration - 0.1);
+      if (elapsed >= 0) {
+        _currentSource.start(ctx.currentTime + 0.05, elapsed);
+        log("[audio] joining '" + msg.title + "' at " + elapsed.toFixed(1) + "s (late join)");
+      } else {
+        log("[audio] track already finished");
+      }
+    }
   } catch (err) {
-    log("[audio] browser error: " + err.message);
+    log("[audio] error: " + err.message);
   }
+}
+
+async function _joinCurrentSession() {
+  try {
+    const status = await api("/api/status");
+    if (status && status.session && status.session.session_id
+        && typeof status.session.start_host_time === "number") {
+      await _startBrowserAudio({
+        session_id: status.session.session_id,
+        start_host_time: status.session.start_host_time,
+        title: status.session.title || "",
+      });
+    }
+  } catch (_) {}
 }
 
 function _subscribeEvents() {
@@ -570,11 +634,6 @@ function _subscribeEvents() {
   };
   es.onerror = () => setTimeout(_subscribeEvents, 3000);
 }
-
-// Unlock AudioContext on first user gesture (required on iOS Safari)
-document.addEventListener("click", () => {
-  if (_audioCtx && _audioCtx.state === "suspended") _audioCtx.resume();
-}, {once: false});
 
 _subscribeEvents();
 """
@@ -611,6 +670,7 @@ class MuSyncWebApp:
                 "title": self.node.session.title,
                 "host_id": self.node.session.host_id,
                 "room_id": self.node.session.room_id,
+                "start_host_time": self.node.session.start_host_time,
             }
         room = None
         if self.node.room:
