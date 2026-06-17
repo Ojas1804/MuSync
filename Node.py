@@ -32,7 +32,7 @@ class Node(HostMixin, ClientMixin):
         self._service_info: Optional[ServiceInfo] = None
         self._browser: Optional[ServiceBrowser] = None
 
-        self._timesync = TimeSyncServer()
+        self.timesync = TimeSyncServer()
         self._control_sock: Optional[socket.socket] = None
         self._control_thread: Optional[threading.Thread] = None
         self._stopping = threading.Event()
@@ -43,7 +43,7 @@ class Node(HostMixin, ClientMixin):
         self.session: Optional[Session] = None
 
     def start(self) -> None:
-        self._timesync.start()
+        self.timesync.start()
         self._start_control_server()
         self._register_zeroconf()
         self._browser = ServiceBrowser(self.zc, SERVICE_TYPE, self.registry)
@@ -61,7 +61,7 @@ class Node(HostMixin, ClientMixin):
             self.zc.close()
         except Exception:
             pass
-        self._timesync.stop()
+        self.timesync.stop()
         if self._control_sock:
             try:
                 self._control_sock.close()

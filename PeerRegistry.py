@@ -10,13 +10,13 @@ class PeerRegistry(ServiceListener):
         self.peers: Dict[str, Peer] = {}
         self._lock = threading.Lock()
 
-    def add_service(self, zc, type_, name):  # noqa: N802
+    def add_service(self, zc, type_, name) -> None:
         self._refresh(zc, type_, name)
 
-    def update_service(self, zc, type_, name):  # noqa: N802
+    def update_service(self, zc, type_, name) -> None:
         self._refresh(zc, type_, name)
 
-    def remove_service(self, zc, type_, name):  # noqa: N802, ARG002
+    def remove_service(self, zc, type_, name) -> None:  # noqa: N802, ARG002
         with self._lock:
             for nid, p in list(self.peers.items()):
                 # zeroconf service name is "<display>-<id>.<SERVICE_TYPE>"
@@ -25,7 +25,7 @@ class PeerRegistry(ServiceListener):
                     print(f"[discovery] lost {p.name} ({p.ip})")
                     return
 
-    def _refresh(self, zc, type_, name):
+    def _refresh(self, zc, type_, name) -> None:
         info = zc.get_service_info(type_, name, timeout=1500)
         if not info:
             return

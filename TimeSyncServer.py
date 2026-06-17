@@ -29,6 +29,7 @@ class TimeSyncServer(threading.Thread):
             except struct.error:
                 continue
             t3 = time.time()
+            # send t1, t2, and t3 to client to sync wrt t2-t1 (offset) and t3-t1 (roundtrip)
             try:
                 sock.sendto(struct.pack("!ddd", t1, t2, t3), addr)
             except OSError:

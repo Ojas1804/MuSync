@@ -42,7 +42,11 @@ Commands:
   help                 show this help
   quit / exit          shut down
 """
-
+def __is_valid_command__(cmd):
+    if cmd not in ("quit", "exit", "help", "create-room", "rooms", "join",
+                   "leave", "room", "peers", "play", "stop", "devices"):
+        return False
+    return True
 
 def repl(node: Node) -> None:
     print(HELP)
@@ -56,6 +60,13 @@ def repl(node: Node) -> None:
             continue
         cmd, _, rest = line.partition(" ")
         cmd = cmd.lower()
+        if not __is_valid_command__(cmd):
+            print(f"unknown command: {cmd}")
+            continue
+
+        # if not __is_valid_rest__(rest):
+        #     print(f"invalid rest: {rest}")
+        #     continue
 
         if cmd in ("quit", "exit"):
             break
