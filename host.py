@@ -20,6 +20,7 @@ from utils import (
     CHUNK_FRAMES,
     DEFAULT_LEAD_IN,
     recv_exact,
+    mp3_to_wav,
 )
 
 
@@ -43,6 +44,12 @@ class HostMixin:
             print("[host] you must create or join a room first "
                   "(use `create-room` or `join <id> <code>`)")
             return
+        
+        # since mp3 might not be supported on some versions of linux, converting to wav
+        if path.endswith(".mp3"):
+            print("[host] converting mp3 to wav")
+            path = mp3_to_wav(path)
+            print("[host] conversion complete")
 
         try:
             data, sr = sf.read(path, dtype="float32", always_2d=True)
