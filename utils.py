@@ -106,7 +106,7 @@ def measure_offset(host_ip: str, samples: int = TIMESYNC_SAMPLES,
         sock.close()
     return best
 
-def mp3_to_wav(mp3_path: str, wav_path: str) -> str:
+def mp3_to_wav(mp3_path: str, wav_path: str = "") -> str:
     wav_path = mp3_path.replace(".mp3", ".wav")
     decoder = miniaudio.mp3_stream_file_iterative(mp3_path)
     miniaudio.stream_file_wav(decoder, wav_path)
