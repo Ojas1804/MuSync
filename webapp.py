@@ -411,10 +411,10 @@ function _doUnlock() {
 }
 
 // ── NTP-style clock sync ──────────────────────────────────────────────────────
-// Estimates the offset so we can schedule audio relative to the host clock.
+// Uses the minimum-RTT sample (least path asymmetry) for the most accurate offset.
 async function syncClock() {
-  const samples = [];
-  for (let i = 0; i < 6; i++) {
+  let best = null;
+  for (let i = 0; i < 8; i++) {
     const t1 = Date.now();
     try {
       const r = await fetch('/api/timesync', {
@@ -424,18 +424,50 @@ async function syncClock() {
       });
       const t4 = Date.now();
       const {t2, t3} = await r.json();
-      samples.push(((t2 - t1) + (t3 - t4)) / 2 / 1000); // seconds
+      const rtt = (t4 - t1) - (t3 - t2);   // network round-trip ms
+      if (rtt > 0 && (best === null || rtt < best.rtt)) {
+        best = {rtt, offset: ((t2 - t1) + (t3 - t4)) / 2 / 1000};
+      }
     } catch (_) {}
-    if (i < 5) await _sleep(25);
+    if (i < 7) await _sleep(20);
   }
-  if (samples.length > 0) {
-    samples.sort((a, b) => a - b);
-    clockOffsetSec = samples[Math.floor(samples.length / 2)];
-    log('Clock offset: ' + (clockOffsetSec * 1000).toFixed(1) + ' ms');
+  if (best) {
+    clockOffsetSec = best.offset;
+    log('Clock offset: ' + (clockOffsetSec * 1000).toFixed(1) + ' ms  (RTT ' + best.rtt.toFixed(1) + ' ms)');
   }
 }
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Periodic drift correction ─────────────────────────────────────────────────
+let _driftTimer = null;
+
+function _startDriftCorrection(session) {
+  _stopDriftCorrection();
+  _driftTimer = setInterval(async () => {
+    if (!currentAudio || !currentSession || currentAudio.paused) return;
+    await syncClock();
+    const hostNow  = Date.now() / 1000 + clockOffsetSec;
+    const expected = hostNow - currentSession.start_host_time;
+    const drift    = currentAudio.currentTime - expected;  // +ve = we're ahead
+    if (Math.abs(drift) > 1.5) {
+      // Large drift — hard seek to correct position
+      const target = Math.min(Math.max(expected + 0.05, 0), currentAudio.duration - 0.2);
+      log('[sync] large drift ' + (drift * 1000).toFixed(0) + ' ms — seeking');
+      currentAudio.currentTime = target;
+    } else if (Math.abs(drift) > 0.08) {
+      // Small drift — nudge playback rate briefly to converge
+      const rate = drift > 0 ? 0.98 : 1.02;
+      log('[sync] drift ' + (drift * 1000).toFixed(0) + ' ms — adjusting rate');
+      currentAudio.playbackRate = rate;
+      setTimeout(() => { if (currentAudio) currentAudio.playbackRate = 1.0; }, 3000);
+    }
+  }, 8000);
+}
+
+function _stopDriftCorrection() {
+  if (_driftTimer) { clearInterval(_driftTimer); _driftTimer = null; }
+}
 
 // ── Browser audio playback via HTML5 <audio> ──────────────────────────────────
 // Why <audio> instead of Web Audio API:
@@ -481,16 +513,30 @@ async function _startAudio(session) {
       setTimeout(() => {
         if (!currentSession || currentSession.session_id !== session.session_id) return;
         audio.play().catch(e => log('[audio] play() failed: ' + e.message));
-        _updateNowPlaying(session, 'Playing');
+        audio.addEventListener('playing', () => {
+          _startDriftCorrection(session);
+          _updateNowPlaying(session, 'Playing');
+        }, {once: true});
       }, Math.max(0, waitMs));
 
     } else if (elapsed < audio.duration - 0.5) {
-      // Late join — seek into the track to stay in sync
-      const target = Math.min(elapsed + 0.15, audio.duration - 0.1);
+      // Late join — seek to synced position
+      const target = Math.min(Math.max(elapsed + 0.05, 0), audio.duration - 0.1);
       audio.currentTime = target;
+      // After playback actually starts, verify and micro-correct position
+      audio.addEventListener('playing', () => {
+        const hostNow2 = Date.now() / 1000 + clockOffsetSec;
+        const expected2 = hostNow2 - session.start_host_time;
+        const drift = audio.currentTime - expected2;
+        if (Math.abs(drift) > 0.1 && Math.abs(drift) < 3.0) {
+          audio.currentTime = Math.min(Math.max(expected2 + 0.05, 0), audio.duration - 0.1);
+          log('[sync] corrected initial drift ' + (drift * 1000).toFixed(0) + ' ms');
+        }
+        _startDriftCorrection(session);
+        _updateNowPlaying(session, 'Playing');
+      }, {once: true});
       audio.play().catch(e => log('[audio] play() failed: ' + e.message));
       log('Joined "' + session.title + '" at ' + elapsed.toFixed(1) + 's');
-      _updateNowPlaying(session, 'Playing');
 
     } else {
       log('"' + session.title + '" has already finished');
@@ -503,6 +549,7 @@ async function _startAudio(session) {
 }
 
 function _stopAudio() {
+  _stopDriftCorrection();
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.removeAttribute('src');
