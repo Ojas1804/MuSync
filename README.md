@@ -4,7 +4,7 @@ Synchronized multi-device audio playback over LAN/Wi-Fi in pure Python.
 
 Any device on the network can become the **host** by playing a local audio file. Every other peer automatically pulls the raw PCM stream over TCP and plays it in lock-step using an NTP-style clock offset measured against the host.
 
-As of now, **CLI is working fine and mp3 support added**. Future work will involve working in Web UI.
+As of now, **CLI and Webapp are working fine, and mp3 support has been added**. Future work will focus more on security and making syncing better.
 
 > **The audio file only needs to exist on the host device.** Peers receive the stream over the network — no file copying required.
 
